@@ -46,7 +46,8 @@
 1. Поставь [Python 3.9+](https://www.python.org/downloads/) (при установке отметь «Add python.exe to PATH»).
 2. Скачай репозиторий: **Code → Download ZIP**, распакуй в любую папку.
 3. Запусти **`wardogs_gui.pyw`** двойным кликом.
-4. Выбери фильтры и нажми **«▶ Включить автозаход»**.
+4. При первом запуске откроется окно **«API-ключ»**. С 7 ноября 2026 wardogserverlist.com отдаёт список серверов только по ключу. Ключ бесплатный: нажми «Открыть страницу ключей», войди через Discord, создай ключ типа **server key**, скопируй его, нажми «Вставить из буфера» и «Сохранить». Ключ хранится в `wardogs_api_key.txt` рядом с программой; поменять его можно кнопкой «API-ключ…».
+5. Выбери фильтры и нажми **«▶ Включить автозаход»**.
 
 Steam должен быть запущен. Игру можно открыть заранее: тогда Steam просто скажет ей зайти на найденный сервер.
 
@@ -63,7 +64,7 @@ flowchart LR
 
 | Источник | Что берём | Сам обновляется | Как часто спрашиваем |
 | --- | --- | --- | --- |
-| [wardogserverlist.com](https://wardogserverlist.com/) `/api/servers` | все сервера: карта, онлайн, начало раунда | раз в ~5 минут | каждые 5 с (ответ из CDN) |
+| [wardogserverlist.com](https://wardogserverlist.com/) `/api/servers` (с API-ключом) | все сервера: карта, онлайн, начало раунда | раз в ~5 минут | каждые 5 с (ответ из CDN) |
 | [wardogsnow.com](https://wardogsnow.com/servers/official) | официальные сервера выбранных регионов | раз в ~1 минуту | раз в 60 с |
 
 Время матча считается на твоём компьютере от момента начала раунда, поэтому секунды точные. Задержка источников влияет только на то, как быстро программа заметит **новый** раунд и изменение онлайна. Для официальных серверов это около минуты, для комьюнити — до 5 минут.
@@ -94,6 +95,8 @@ py wardogs_finder.py --map bakurani --region eu --min-players 60 --minutes 0-10 
 
 Ещё параметры: `--kind official|community`, `--infantry only|no`, `--name <часть названия>`, `--allow-full`, `--passworded`, `--interval 60`. Карты можно писать по-русски: `бакурани`, `озети`, `зестафона`.
 
+Ключ консольная версия берёт из `--api-key`, переменной окружения `WARDOGS_API_KEY` или файла `wardogs_api_key.txt` рядом с программой (одна строка с ключом).
+
 `wardogs_join.bat` — то же самое двойным кликом: параметры правятся в начале файла.
 
 ## Ограничения
@@ -118,6 +121,6 @@ py wardogs_finder.py --map bakurani --region eu --min-players 60 --minutes 0-10 
 
 **WARDOGS Server Finder** watches every WARDOGS server and joins the first one that matches your map, region, player count and match minute, so you never have to dig through the menu for a match that has just started. It shows a live match timer per server, highlights servers that match now (green) or will match soon (yellow), and auto-joins through Steam's own `steam://joinlobby` link. It does not read or modify game memory and sends no input to the game.
 
-Install Python 3.9+, download the repo, double-click `wardogs_gui.pyw`. Data comes from [wardogserverlist.com](https://wardogserverlist.com/) and [wardogsnow.com](https://wardogsnow.com/); please keep the polling intervals as they are. Unofficial, not affiliated with BULKHEAD or Team17. MIT licensed.
+Install Python 3.9+, download the repo, double-click `wardogs_gui.pyw`. Since 7 Nov 2026 wardogserverlist.com needs a free API key: make a **server key** on its [account page](https://wardogserverlist.com/account#api-keys) and paste it into the **API key** dialog (it is saved to `wardogs_api_key.txt`). Data comes from [wardogserverlist.com](https://wardogserverlist.com/) and [wardogsnow.com](https://wardogsnow.com/); please keep the polling intervals as they are. Unofficial, not affiliated with BULKHEAD or Team17. MIT licensed.
 
 </details>

@@ -2,7 +2,10 @@
 """Ищет сервер WARDOGS по карте, онлайну и минуте матча и заходит на него через Steam.
 
 Данные: публичный список https://wardogserverlist.com/api/servers (сайт читает браузер
-серверов игры раз в ~5 минут, CDN держит ответ ещё 90 с). Для официальных серверов есть
+серверов игры раз в ~5 минут, CDN держит ответ ещё 90 с). С 7 ноября 2026 он отвечает только
+с API-ключом: ключ делается бесплатно на https://wardogserverlist.com/account#api-keys (вход
+через Discord, тип «server key») и кладётся в wardogs_api_key.txt рядом с программой или в
+переменную окружения WARDOGS_API_KEY. Для официальных серверов есть
 источник свежее — wardogsnow.com (раз в ~минуту), его подмешивает окно wardogs_gui.pyw.
 Вход: публичная страница сайта /join?key=... отдаёт ссылку steam://joinlobby/1867240/<лобби>;
 Steam по ней запускает игру или говорит уже запущенной игре зайти на сервер.
@@ -21,11 +24,16 @@ import re
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 
 API_URL = "https://wardogserverlist.com/api/servers"
 JOIN_PAGE_URL = "https://wardogserverlist.com/join"
+API_KEYS_PAGE_URL = "https://wardogserverlist.com/account#api-keys"
+API_KEY_ENV = "WARDOGS_API_KEY"
+API_KEY_PATH = Path(__file__).resolve().with_name("wardogs_api_key.txt")
 USER_AGENT = "wardogs-server-finder/1.0 (+https://github.com/drapik/wardogs-server-finder)"
 STEAM_LOBBY_LINK = re.compile(r"steam://joinlobby/1867240/\d+")
 # Раунды идут до ~4 часов; старше суток — протухшая отметка, а не текущий матч.
@@ -83,8 +91,8 @@ def parse_minutes(value):
     return lo, hi
 
 
-def http_get(url, accept_gzip=False):
-    headers = {"User-Agent": USER_AGENT}
+def http_get(url, accept_gzip=False, extra_headers=None):
+    headers = {"User-Agent": USER_AGENT, **(extra_headers or {})}
     if accept_gzip:
         headers["Accept-Encoding"] = "gzip"
     with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=20) as resp:
@@ -94,8 +102,53 @@ def http_get(url, accept_gzip=False):
     return body
 
 
-def fetch_servers():
-    return json.loads(http_get(API_URL, accept_gzip=True))
+class ApiKeyError(Exception):
+    """Список не отдают из-за ключа: повтор с тем же ключом не поможет, нужен другой."""
+
+
+def load_api_key():
+    """Ключ из WARDOGS_API_KEY или wardogs_api_key.txt; пустая строка — ключа нет."""
+    key = os.environ.get(API_KEY_ENV, "").strip()
+    if key:
+        return key
+    try:
+        # utf-8-sig: Блокнот Windows может дописать BOM в начало файла.
+        return API_KEY_PATH.read_text(encoding="utf-8-sig").strip()
+    except OSError:
+        return ""
+
+
+def save_api_key(key):
+    API_KEY_PATH.write_text(key.strip() + "\n", encoding="utf-8")
+
+
+def api_error_text(exc):
+    """Текст для человека по ответу 401/403 сайта (тело — JSON с error и message)."""
+    try:
+        body = json.loads(exc.read().decode("utf-8", "replace"))
+    except Exception:
+        body = {}
+    code, message = body.get("error", ""), body.get("message", "")
+    if exc.code == 401 and code == "api_key_required":
+        text = "сайт требует API-ключ, а он не задан"
+    elif exc.code == 401:
+        text = "сайт не принял API-ключ: он неверный или отозван"
+    else:
+        text = "ключ не подходит для программы: нужен тип «server key», а не «browser key»"
+    return f"{text} (HTTP {exc.code}{': ' + message if message else ''})"
+
+
+def fetch_servers(api_key=None):
+    key = api_key or load_api_key()
+    if not key:
+        raise ApiKeyError(f"нет API-ключа wardogserverlist: сделай его на {API_KEYS_PAGE_URL} "
+                          f"и положи в {API_KEY_PATH.name}")
+    try:
+        return json.loads(http_get(API_URL, accept_gzip=True, extra_headers={"X-API-Key": key}))
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            raise ApiKeyError(api_error_text(exc)) from None
+        raise
 
 
 WARDOGSNOW_OFFICIAL_URL = "https://wardogsnow.com/servers/official"
@@ -321,6 +374,8 @@ def main(argv=None):
     p.add_argument("--once", action="store_true", help="один проход: показать список и выйти")
     p.add_argument("--interval", type=int, default=60, help="пауза между проверками, с (не меньше 30)")
     p.add_argument("--limit", type=int, default=15, help="сколько строк показывать")
+    p.add_argument("--api-key", default=None,
+                   help=f"ключ wardogserverlist (иначе берётся из {API_KEY_ENV} или {API_KEY_PATH.name})")
     args = p.parse_args(argv)
     args.minutes_set = args.minutes is not None
     args.minutes = args.minutes or (0, MAX_ROUND_MINUTES)
@@ -329,7 +384,10 @@ def main(argv=None):
 
     while True:
         try:
-            ready, upcoming = find(fetch_servers(), args)
+            ready, upcoming = find(fetch_servers(args.api_key), args)
+        except ApiKeyError as exc:  # с этим ключом ждать бесполезно
+            print(f"[{time.strftime('%H:%M:%S')}] {exc}")
+            return 3
         except Exception as exc:  # сеть/сайт лежит — просто ждём следующего круга
             print(f"[{time.strftime('%H:%M:%S')}] не удалось получить список: {exc}")
             ready, upcoming = None, []
