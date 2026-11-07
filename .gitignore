@@ -1,3 +1,4 @@
 __pycache__/
 *.pyc
 wardogs_gui.json
+wardogs_api_key.txt

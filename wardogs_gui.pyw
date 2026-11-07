@@ -19,6 +19,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import wardogs_finder as w  # noqa: E402
 
 POLL_SECONDS = 5
+# Ключ не приняли — с тем же ключом не долбим сайт; новый ключ из окна будит опрос сразу.
+KEY_RETRY_SECONDS = 60
 # wardogsnow сам обновляется раз в ~минуту: спрашивать чаще бессмысленно и грузит фан-сайт.
 LIVE_SECONDS = 60
 LIVE_MAX_AGE = 180
@@ -93,27 +95,33 @@ class Poller(threading.Thread):
     def __init__(self):
         super().__init__(daemon=True)
         self.lock = threading.Lock()
-        self.base, self.error = None, None
+        self.base, self.error, self.key_problem = None, None, False
         self.live = {}  # регион -> (когда получено, строки)
         self.live_error = None
         self.version, self.merged_version, self.merged = 0, -1, None
         # Пишет окно на каждом тике: (регионы, только со свободным местом, минимум игроков).
         self.wanted = (frozenset(), True, 0)
+        self.wake = threading.Event()  # окно сохранило новый ключ — спросить сразу
 
     def run(self):
         threading.Thread(target=self.run_live, daemon=True).start()
         while True:
             started = time.time()
+            key_problem = False
             try:
                 data, error = w.fetch_servers(), None
+            except w.ApiKeyError as exc:
+                data, error, key_problem = None, str(exc), True
             except Exception as exc:  # сеть или сайт — покажем в статусе и повторим
                 data, error = None, str(exc)
             with self.lock:
                 if data is not None and (self.base is None or data.get("updatedAt") != self.base.get("updatedAt")):
                     self.base = data
                     self.version += 1
-                self.error = error
-            time.sleep(max(0.5, POLL_SECONDS - (time.time() - started)))
+                self.error, self.key_problem = error, key_problem
+            pause = KEY_RETRY_SECONDS if key_problem else POLL_SECONDS
+            self.wake.wait(max(0.5, pause - (time.time() - started)))
+            self.wake.clear()
 
     def run_live(self):
         tried = {}  # регион -> когда спрашивали в последний раз (и при ошибке тоже)
@@ -134,7 +142,7 @@ class Poller(threading.Thread):
             time.sleep(1)
 
     def snapshot(self):
-        """(данные с подмешанными свежими, ошибка, возраст свежих данных по выбранным регионам в с)."""
+        """(данные с подмешанными свежими, ошибка, ошибка из-за ключа?, возраст свежих данных в с)."""
         with self.lock:
             now = time.time()
             if self.base is not None and self.version != self.merged_version:
@@ -145,7 +153,8 @@ class Poller(threading.Thread):
                         w.merge_official_live(merged, region, rows, at)
                 self.merged, self.merged_version = merged, self.version
             ages = [now - self.live[r][0] for r in self.wanted[0] if r in self.live]
-            return self.merged, self.error or self.live_error, (max(ages) if ages else None)
+            return (self.merged, self.error or self.live_error, self.key_problem,
+                    (max(ages) if ages else None))
 
 
 class App:
@@ -165,7 +174,11 @@ class App:
         self.build_vars()
         self.build_ui()
         root.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.key_dialog = None
+        self.last_key_error = None
         self.tick()
+        if not w.load_api_key():
+            root.after(400, self.open_key_dialog)
 
     # ---------- оформление ----------
 
@@ -251,6 +264,9 @@ class App:
         head = ttk.Frame(outer, style="Bg.TFrame")
         head.pack(fill="x")
         ttk.Label(head, text="WARDOGS · поиск сервера", style="Head.TLabel").pack(side="left")
+        # Условие лицензии CC BY 4.0 у wardogserverlist — видимая ссылка на источник.
+        ttk.Label(head, text="данные: wardogserverlist.com (CC BY 4.0), wardogsnow.com",
+                  style="Status.TLabel").pack(side="left", padx=(14, 0))
         self.data_label = ttk.Label(head, text="загружаю список…", style="Status.TLabel")
         self.data_label.pack(side="right")
 
@@ -318,6 +334,8 @@ class App:
         ttk.Checkbutton(bar, text="Поверх окон", variable=self.v["topmost"], style="Bar.TCheckbutton").pack(side="left")
         ttk.Style(self.root).configure("Bar.TCheckbutton", background=C["bg"])
         ttk.Style(self.root).map("Bar.TCheckbutton", background=[("active", C["bg"])])
+        ttk.Button(bar, text="API-ключ…", style="Ghost.TButton",
+                   command=self.open_key_dialog).pack(side="right")
         self.paint_arm()
 
         # --- таблица ---
@@ -402,8 +420,8 @@ class App:
         f = self.filters()
         live_regions = frozenset() if f.kind == "community" else frozenset(f.regions)
         self.poller.wanted = (live_regions, not f.allow_full, f.min_players)
-        data, error, live_age = self.poller.snapshot()
-        self.update_header(data, error, live_age, live_regions)
+        data, error, key_problem, live_age = self.poller.snapshot()
+        self.update_header(data, error, key_problem, live_age, live_regions)
         if data:
             rows, f = self.compute_rows(data)
             self.sync_table(rows, f)
@@ -418,7 +436,15 @@ class App:
         self.finish_join()
         self.root.after(1000, self.tick)
 
-    def update_header(self, data, error, live_age, live_regions):
+    def update_header(self, data, error, key_problem, live_age, live_regions):
+        if key_problem:
+            self.data_label.configure(text="нет доступа к списку серверов — нажми «API-ключ…»",
+                                      style="Err.TLabel")
+            if error != self.last_key_error:  # подробность — в строку статуса, один раз
+                self.last_key_error = error
+                self.set_status(error)
+            return
+        self.last_key_error = None
         if error:
             self.data_label.configure(text=f"ошибка сети: {error[:80]} — повторяю", style="Err.TLabel")
             return
@@ -533,6 +559,80 @@ class App:
 
     def set_status(self, text):
         self.status.configure(text=f"[{time.strftime('%H:%M:%S')}] {text}")
+
+    # ---------- API-ключ ----------
+
+    def open_key_dialog(self):
+        if self.key_dialog is not None and self.key_dialog.winfo_exists():
+            self.key_dialog.lift()
+            self.key_dialog.focus_force()
+            return
+        dlg = tk.Toplevel(self.root, bg=C["bg"])
+        self.key_dialog = dlg
+        dlg.title("API-ключ wardogserverlist")
+        dlg.transient(self.root)
+        dlg.resizable(False, False)
+        # Поверх окон — только вслед за главным окном: иначе диалог висит поверх игры.
+        dlg.attributes("-topmost", self.v["topmost"].get())
+
+        box = ttk.Frame(dlg, style="Panel.TFrame", padding=(18, 14))
+        box.pack(fill="both", expand=True)
+        text = ("С 7 ноября сайт wardogserverlist.com отдаёт список серверов только по API-ключу.\n"
+                "Ключ бесплатный, делается за минуту:\n"
+                "  1. «Открыть страницу ключей» → Sign in with Discord.\n"
+                "  2. В разделе API keys создай ключ типа «server key» (не «browser key»).\n"
+                "  3. Скопируй ключ, нажми «Вставить из буфера» и «Сохранить».\n"
+                f"Ключ хранится только у тебя, в файле {w.API_KEY_PATH.name} рядом с программой.")
+        ttk.Label(box, text=text, justify="left").pack(anchor="w")
+
+        current = w.load_api_key()
+        key_var = tk.StringVar(value=current)
+        row = ttk.Frame(box, style="Panel.TFrame")
+        row.pack(fill="x", pady=(12, 4))
+        ttk.Label(row, text="Ключ", style="Dim.TLabel").pack(side="left", padx=(0, 8))
+        entry = ttk.Entry(row, textvariable=key_var, width=56, show="•")
+        entry.pack(side="left", fill="x", expand=True)
+        shown = tk.BooleanVar(value=False)
+        ttk.Checkbutton(row, text="показать", variable=shown,
+                        command=lambda: entry.configure(show="" if shown.get() else "•")).pack(side="left", padx=(8, 0))
+        note = ttk.Label(box, text="ключ сохранён" if current else "ключа пока нет", style="Dim.TLabel")
+        note.pack(anchor="w")
+
+        def paste():
+            # Ctrl+V в Tk на Windows не срабатывает на русской раскладке — отсюда отдельная кнопка.
+            try:
+                key_var.set(self.root.clipboard_get().strip())
+                note.configure(text="вставлено из буфера — нажми «Сохранить»")
+            except tk.TclError:
+                note.configure(text="в буфере нет текста")
+
+        def save():
+            key = key_var.get().strip()
+            if not key:
+                note.configure(text="ключ пустой")
+                return
+            try:
+                w.save_api_key(key)
+            except OSError as exc:
+                note.configure(text=f"не удалось сохранить: {exc}")
+                return
+            self.poller.wake.set()
+            self.set_status("Ключ сохранён, запрашиваю список серверов…")
+            dlg.destroy()
+
+        buttons = ttk.Frame(box, style="Panel.TFrame")
+        buttons.pack(fill="x", pady=(12, 0))
+        ttk.Button(buttons, text="Открыть страницу ключей", style="Ghost.TButton",
+                   command=lambda: w.open_url(w.API_KEYS_PAGE_URL)).pack(side="left")
+        ttk.Button(buttons, text="Вставить из буфера", style="Ghost.TButton",
+                   command=paste).pack(side="left", padx=8)
+        ttk.Button(buttons, text="Отмена", style="Ghost.TButton",
+                   command=dlg.destroy).pack(side="right")
+        ttk.Button(buttons, text="Сохранить", style="Ghost.TButton",
+                   command=save).pack(side="right", padx=8)
+        entry.bind("<Return>", lambda e: save())
+        dlg.bind("<Escape>", lambda e: dlg.destroy())
+        entry.focus_set()
 
     # ---------- настройки ----------
 
