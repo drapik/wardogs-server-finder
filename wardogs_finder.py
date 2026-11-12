@@ -44,12 +44,15 @@ MAPS = {
     "Kavkazi": "Bakurani",
     "Europe": "Ozeti",
     "NorthAmerica": "Zestafona",
+    "Russia": "Sabatulo",
 }
 MAP_ALIASES = {
     "bakurani": "Kavkazi", "kavkazi": "Kavkazi", "бакурани": "Kavkazi",
     "ozeti": "Europe", "europe": "Europe", "madrid": "Europe", "озети": "Europe",
     "zestafona": "NorthAmerica", "northamerica": "NorthAmerica", "detroit": "NorthAmerica",
     "зестафона": "NorthAmerica",
+    # wardogsnow подписывает Sabatulo внутренним именем Moscow.
+    "sabatulo": "Russia", "russia": "Russia", "moscow": "Russia", "сабатуло": "Russia",
 }
 REGIONS = [
     "eu-central", "eu-east", "eu-west", "eu-south",
@@ -63,7 +66,7 @@ def parse_maps(value):
     for name in value.split(","):
         key = name.strip().lower().replace(" ", "")
         if key not in MAP_ALIASES:
-            raise argparse.ArgumentTypeError(f"неизвестная карта {name!r}; есть: Bakurani, Ozeti, Zestafona")
+            raise argparse.ArgumentTypeError(f"неизвестная карта {name!r}; есть: {', '.join(MAPS.values())}")
         worlds.add(MAP_ALIASES[key])
     return worlds
 
@@ -357,7 +360,7 @@ def main(argv=None):
         sys.stdout.reconfigure(errors="replace")
     p = argparse.ArgumentParser(description="Поиск и автоподключение к серверам WARDOGS")
     p.add_argument("--map", dest="maps", type=parse_maps, default=set(),
-                   help="карта(ы) через запятую: bakurani, ozeti, zestafona")
+                   help="карта(ы) через запятую: " + ", ".join(t.lower() for t in MAPS.values()))
     p.add_argument("--region", dest="regions", type=parse_regions, default=set(),
                    help="регион(ы): eu, eu-east, eu-central, na, ...")
     p.add_argument("--min-players", type=int, default=1, help="минимум игроков (по умолчанию 1)")
