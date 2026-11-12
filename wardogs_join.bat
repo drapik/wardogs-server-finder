@@ -1,6 +1,6 @@
 @echo off
 rem WARDOGS: wait for a matching server and join it via Steam.
-rem Edit the values below. Maps: bakurani, ozeti, zestafona (comma-separated).
+rem Edit the values below. Maps: bakurani, ozeti, zestafona, sabatulo (comma-separated).
 rem Regions: eu, eu-east, eu-central, eu-west, eu-south, na, ...
 rem MINUTES: match minute range, e.g. 0-10, 30-45, 60-
 set MAP=bakurani
